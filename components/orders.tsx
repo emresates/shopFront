@@ -1,0 +1,449 @@
+"use client";
+import Link from "next/link";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Plus,
+  ArrowRight,
+  CheckCircle2,
+  MapPin,
+  Package,
+  RefreshCw,
+} from "lucide-react";
+import { ordersApi } from "@/lib/api/orders";
+import { date, errorMessage, money } from "@/lib/format";
+import {
+  getAllowedOrderTransitions,
+  isOrderStatus,
+  orderStatusLabel,
+} from "@/lib/order-status";
+import type { Order, OrderStatus } from "@/types";
+import { useAuth, useCart, useToast } from "./providers";
+import { AddressForm, useAddresses } from "./addresses";
+import {
+  Button,
+  Empty,
+  ErrorState,
+  Modal,
+  PageTitle,
+  ProductPhoto,
+  Skeleton,
+} from "./ui";
+export function OrderStatusBadge({ status }: { status: OrderStatus }) {
+  return (
+    <span
+      className={`badge order-status ${isOrderStatus(status) ? `status-${status.toLowerCase()}` : ""}`}
+    >
+      {orderStatusLabel(status)}
+    </span>
+  );
+}
+function OrderStatusActions({ order }: { order: Order }) {
+  const { currentUser } = useAuth();
+  const client = useQueryClient();
+  const toast = useToast();
+  const allowed = getAllowedOrderTransitions(order.status);
+  const [next, setNext] = useState<OrderStatus | "">("");
+  const [confirming, setConfirming] = useState<OrderStatus | null>(null);
+  const selected = next && allowed.includes(next) ? next : allowed[0];
+  const update = useMutation({
+    mutationFn: (status: OrderStatus) =>
+      ordersApi.updateStatus(order.id, status),
+    onSuccess: (result) => {
+      if (result.data)
+        client.setQueryData(["order", currentUser?.id, order.id], result);
+      void client.invalidateQueries({ queryKey: ["orders"] });
+      void client.invalidateQueries({ queryKey: ["order"] });
+      setConfirming(null);
+      setNext("");
+      toast(result.message || "Sipariş durumu güncellendi.");
+    },
+    onError: (error) => {
+      setConfirming(null);
+      toast(errorMessage(error), true);
+      // A conflict means our copy is stale; reload the order from the API.
+      void client.invalidateQueries({ queryKey: ["order"] });
+    },
+  });
+  return (
+    <div className="status-manage">
+      <p className="eyebrow">YÖNETİM</p>
+      <h3>Sipariş durumu</h3>
+      <div className="status-current">
+        <span className="muted">Mevcut durum</span>
+        <OrderStatusBadge status={order.status} />
+      </div>
+      {!allowed.length ? (
+        <>
+          <p className="summary-note">
+            {order.status === "Cancelled"
+              ? "Sipariş iptal edildi. Durumu artık değiştirilemez."
+              : order.status === "Delivered"
+                ? "Sipariş tamamlandı. Durumu artık değiştirilemez."
+                : "Bu sipariş için uygun bir durum geçişi yok."}
+          </p>
+          <Button className="btn-secondary" disabled>
+            <RefreshCw size={16} />
+            Durumu güncelle
+          </Button>
+        </>
+      ) : (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (selected && !update.isPending) setConfirming(selected);
+          }}
+        >
+          <label>
+            Yeni durum
+            <select
+              value={selected}
+              disabled={update.isPending}
+              onChange={(event) => setNext(event.target.value as OrderStatus)}
+            >
+              {allowed.map((status) => (
+                <option key={status} value={status}>
+                  {orderStatusLabel(status)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button type="submit" pending={update.isPending}>
+            <RefreshCw size={16} />
+            Durumu güncelle
+          </Button>
+        </form>
+      )}
+      {confirming && (
+        <Modal
+          title="Durum güncellensin mi?"
+          close={() => {
+            if (!update.isPending) setConfirming(null);
+          }}
+        >
+          <p>
+            Sipariş #{order.id}, “{orderStatusLabel(confirming)}” durumuna
+            geçirilecek. Bu işlemden emin misin?
+            {confirming === "Cancelled" &&
+              " İptal edilen sipariş tekrar aktif edilemez."}
+          </p>
+          <div className="form-actions">
+            <Button
+              className="btn-secondary"
+              disabled={update.isPending}
+              onClick={() => setConfirming(null)}
+            >
+              Vazgeç
+            </Button>
+            <Button
+              className={confirming === "Cancelled" ? "btn-danger" : ""}
+              pending={update.isPending}
+              onClick={() => {
+                if (!update.isPending) update.mutate(confirming);
+              }}
+            >
+              {confirming === "Cancelled" ? "Siparişi iptal et" : "Onayla"}
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+export function Checkout() {
+  const cart = useCart();
+  const addresses = useAddresses();
+  const client = useQueryClient();
+  const toast = useToast();
+  const router = useRouter();
+  const [chosen, setChosen] = useState<number | null>(null);
+  const [adding, setAdding] = useState(false);
+  const selected =
+    addresses.data?.data?.find((a) => a.id === chosen)?.id ??
+    addresses.data?.data?.find((a) => a.isDefault)?.id ??
+    addresses.data?.data?.[0]?.id;
+  const order = useMutation({
+    mutationFn: () => {
+      if (!selected) throw new Error("Bir teslimat adresi seçin.");
+      return ordersApi.create(selected);
+    },
+    onSuccess: (result) => {
+      client.removeQueries({ queryKey: ["cart"] });
+      void client.invalidateQueries({ queryKey: ["cart"] });
+      void client.invalidateQueries({ queryKey: ["orders"] });
+      toast("Sipariş oluşturuldu.");
+      router.replace(
+        result.data?.id
+          ? `/orders/${result.data.id}?success=1`
+          : "/orders?success=1",
+      );
+    },
+    onError: () => {
+      void client.invalidateQueries({ queryKey: ["cart"] });
+    },
+  });
+  if (order.isSuccess)
+    return (
+      <Empty
+        title="Siparişiniz oluşturuldu."
+        description="Sipariş detaylarına yönlendiriliyorsunuz."
+        href="/orders"
+        cta="Siparişlerime git"
+      />
+    );
+  return (
+    <>
+      <PageTitle
+        eyebrow="SON BİR ADIM"
+        title="Sana doğru yola çıksın."
+        description="Teslimat adresini seç ve siparişini onayla."
+      />
+      {cart.isPending || addresses.isPending ? (
+        <Skeleton cards={3} />
+      ) : cart.isError ? (
+        <ErrorState error={cart.error} retry={() => void cart.refetch()} />
+      ) : addresses.isError ? (
+        <ErrorState
+          error={addresses.error}
+          retry={() => void addresses.refetch()}
+        />
+      ) : !cart.data?.data?.items.length ? (
+        <Empty title="Sepetiniz boş." href="/products" />
+      ) : (
+        <div className="checkout-layout">
+          <div>
+            <div className="section-heading compact">
+              <h2>01 / Teslimat adresi</h2>
+              <Button className="btn-secondary" onClick={() => setAdding(true)}>
+                <Plus size={16} />
+                Yeni adres
+              </Button>
+            </div>
+            {!addresses.data?.data?.length ? (
+              <Empty
+                title="Henüz kayıtlı adresiniz yok."
+                description="Sipariş vermek için bir teslimat adresi ekleyin."
+              />
+            ) : (
+              <fieldset className="address-grid">
+                <legend className="sr-only">Teslimat adresi</legend>
+                {addresses.data.data.map((a) => (
+                  <label
+                    className={`address-card selectable ${selected === a.id ? "selected" : ""}`}
+                    key={a.id}
+                  >
+                    <div className="card-heading">
+                      <input
+                        type="radio"
+                        name="address"
+                        value={a.id}
+                        checked={selected === a.id}
+                        onChange={() => setChosen(a.id)}
+                        disabled={order.isPending}
+                      />
+                      <h3>{a.title}</h3>
+                      {a.isDefault && <span className="badge">Varsayılan</span>}
+                    </div>
+                    <strong>{a.fullName}</strong>
+                    <p>{a.addressLine}</p>
+                    <p>
+                      {a.district} / {a.city}
+                    </p>
+                    <p className="muted">{a.phone}</p>
+                  </label>
+                ))}
+              </fieldset>
+            )}
+            <h2 className="checkout-products-title">02 / Ürünlerin</h2>
+            {cart.data.data.items.map((item) => (
+              <div className="checkout-item" key={item.id}>
+                <ProductPhoto src={item.mainImageUrl} name={item.productName} />
+                <div>
+                  <h3>{item.productName}</h3>
+                  <p className="muted">
+                    {item.quantity} adet × {money(item.unitPrice)}
+                  </p>
+                </div>
+                <strong>{money(item.lineTotal)}</strong>
+              </div>
+            ))}
+          </div>
+          <aside className="summary">
+            <p className="eyebrow">SİPARİŞ ÖZETİ</p>
+            <h2>Hazırsan, tamam.</h2>
+            <div className="summary-row">
+              <span>Ürün adedi</span>
+              <span>{cart.data.data.totalQuantity}</span>
+            </div>
+            <div className="summary-row total">
+              <span>Toplam</span>
+              <strong>{money(cart.data.data.totalPrice)}</strong>
+            </div>
+            <p className="summary-note">
+              Sipariş tutarı güncel stok ve fiyatlarla sunucuda hesaplanır. Bu
+              işlem online ödeme içermez.
+            </p>
+            {order.error && (
+              <p className="field-error" role="alert">
+                {order.error.message} Siparişlerim sayfasını kontrol ederek
+                tekrar deneyin.
+              </p>
+            )}
+            <Button
+              pending={order.isPending}
+              disabled={
+                !selected ||
+                cart.data.data.items.some((i) => i.quantity > i.stock)
+              }
+              onClick={() => {
+                if (!order.isPending) order.mutate();
+              }}
+            >
+              Siparişi onayla
+              <ArrowRight size={17} />
+            </Button>
+            <Link className="text-link" href="/cart">
+              Sepete dön
+            </Link>
+          </aside>
+        </div>
+      )}
+      {adding && (
+        <AddressForm close={() => setAdding(false)} saved={setChosen} />
+      )}
+    </>
+  );
+}
+export function Orders({ success = false }: { success?: boolean }) {
+  const { currentUser } = useAuth();
+  const orders = useQuery({
+    queryKey: ["orders", currentUser?.id],
+    queryFn: ordersApi.list,
+  });
+  return (
+    <>
+      <PageTitle
+        eyebrow="HESABIM"
+        title="Siparişlerim."
+        description="Seçtiklerin ve yolculukları."
+      />
+      {success && (
+        <div className="success-banner">
+          <CheckCircle2 />
+          Siparişiniz başarıyla oluşturuldu.
+        </div>
+      )}
+      {orders.isPending ? (
+        <Skeleton cards={3} />
+      ) : orders.isError ? (
+        <ErrorState error={orders.error} retry={() => void orders.refetch()} />
+      ) : !orders.data.data?.length ? (
+        <Empty title="Henüz siparişiniz yok." href="/products" />
+      ) : (
+        <div className="orders-list">
+          {orders.data.data.map((order) => (
+            <Link
+              className="order-card"
+              key={order.id}
+              href={`/orders/${order.id}`}
+            >
+              <div className="order-icon">
+                <Package size={25} />
+              </div>
+              <div>
+                <h3>Sipariş #{order.id}</h3>
+                <p className="muted">
+                  {date(order.createdAt)} ·{" "}
+                  {order.items?.reduce((sum, item) => sum + item.quantity, 0) ??
+                    0}{" "}
+                  ürün
+                </p>
+              </div>
+              <OrderStatusBadge status={order.status} />
+              <strong>{money(order.totalPrice)}</strong>
+              <ArrowRight size={20} />
+            </Link>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+export function OrderDetail({
+  id,
+  success = false,
+}: {
+  id: number;
+  success?: boolean;
+}) {
+  const { currentUser } = useAuth();
+  const query = useQuery({
+    queryKey: ["order", currentUser?.id, id],
+    queryFn: () => ordersApi.get(id),
+  });
+  if (query.isPending) return <Skeleton cards={2} />;
+  if (query.isError)
+    return (
+      <ErrorState error={query.error} retry={() => void query.refetch()} />
+    );
+  const order = query.data.data;
+  if (!order)
+    return (
+      <Empty
+        title="Sipariş bulunamadı."
+        href="/orders"
+        cta="Siparişlerime dön"
+      />
+    );
+  return (
+    <>
+      {success && (
+        <div className="success-banner">
+          <CheckCircle2 />
+          Siparişiniz başarıyla oluşturuldu.
+        </div>
+      )}
+      <PageTitle eyebrow={date(order.createdAt)} title={`Sipariş #${order.id}`}>
+        <OrderStatusBadge status={order.status} />
+      </PageTitle>
+      <div className="checkout-layout">
+        <div className="panel">
+          <h2>Siparişindeki ürünler</h2>
+          {order.items.map((item, index) => (
+            <div className="order-line" key={`${item.productId}-${index}`}>
+              <div>
+                <Link href={`/products/${item.productId}`}>
+                  <h3>{item.productName}</h3>
+                </Link>
+                <p className="muted">
+                  {item.quantity} adet × {money(item.unitPrice)}
+                </p>
+              </div>
+              <strong>{money(item.lineTotal)}</strong>
+            </div>
+          ))}
+          <div className="summary-row total">
+            <span>Sipariş toplamı</span>
+            <strong>{money(order.totalPrice)}</strong>
+          </div>
+        </div>
+        <aside className="summary">
+          <MapPin size={25} />
+          <h2>Teslimat adresi</h2>
+          <strong>{order.shippingFullName}</strong>
+          <p>{order.shippingAddressLine}</p>
+          <p>
+            {order.shippingDistrict} / {order.shippingCity}
+          </p>
+          {currentUser?.role === "Admin" && (
+            <OrderStatusActions order={order} />
+          )}
+          <Link href="/orders" className="text-link">
+            Tüm siparişler <ArrowRight size={16} />
+          </Link>
+        </aside>
+      </div>
+    </>
+  );
+}
