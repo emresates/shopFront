@@ -8,11 +8,12 @@ import {
   ArrowRight,
   CheckCircle2,
   MapPin,
+  History,
   Package,
   XCircle,
 } from "lucide-react";
 import { ordersApi } from "@/lib/api/orders";
-import { date, errorMessage, money } from "@/lib/format";
+import { date, dateTime, errorMessage, money } from "@/lib/format";
 import {
   canCancelOrder,
   getAllowedOrderTransitions,
@@ -38,6 +39,95 @@ export function OrderStatusBadge({ status }: { status: OrderStatus }) {
     >
       {orderStatusLabel(status)}
     </span>
+  );
+}
+function TimelineSkeleton() {
+  return (
+    <div className="timeline" aria-label="Yükleniyor" role="status">
+      {Array.from({ length: 2 }, (_, i) => (
+        <div className="timeline-item" key={i}>
+          <span className="timeline-dot skeleton" />
+          <div className="timeline-body">
+            <div className="skeleton skeleton-line short" />
+            <div className="skeleton skeleton-line" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+export function OrderStatusTimeline({
+  orderId,
+  currentStatus,
+}: {
+  orderId: number;
+  currentStatus: OrderStatus;
+}) {
+  const { currentUser } = useAuth();
+  // Nested under ["order"] so every order mutation's invalidation refreshes it.
+  const history = useQuery({
+    queryKey: ["order", currentUser?.id, orderId, "history"],
+    queryFn: () => ordersApi.history(orderId),
+  });
+  // Newest first, so the current status leads the timeline.
+  const entries = [...(history.data?.data ?? [])].reverse();
+  return (
+    <section className="order-history" aria-labelledby={`history-${orderId}`}>
+      <h2 id={`history-${orderId}`}>
+        <History size={20} />
+        Sipariş Geçmişi
+      </h2>
+      {history.isPending ? (
+        <TimelineSkeleton />
+      ) : history.isError ? (
+        <ErrorState
+          error={history.error}
+          retry={() => void history.refetch()}
+        />
+      ) : !entries.length ? (
+        <p className="timeline-empty muted">
+          Bu sipariş için kayıtlı bir durum değişikliği bulunmuyor.
+        </p>
+      ) : (
+        <ol className="timeline">
+          {entries.map((entry, index) => {
+            const current = index === 0 && entry.newStatus === currentStatus;
+            return (
+              <li
+                key={entry.id}
+                className={`timeline-item ${current ? "current" : ""}`}
+              >
+                <span
+                  className={`timeline-dot ${isOrderStatus(entry.newStatus) ? `status-${entry.newStatus.toLowerCase()}` : ""}`}
+                  aria-hidden="true"
+                />
+                <div className="timeline-body">
+                  <div className="timeline-head">
+                    <OrderStatusBadge status={entry.newStatus} />
+                    {current && <span className="timeline-now">Güncel</span>}
+                  </div>
+                  <p className="timeline-title">
+                    {entry.oldStatus === null
+                      ? "Sipariş oluşturuldu"
+                      : `${orderStatusLabel(entry.oldStatus)} → ${orderStatusLabel(entry.newStatus)}`}
+                  </p>
+                  <p className="timeline-meta muted">
+                    <time dateTime={entry.changedAt}>
+                      {dateTime(entry.changedAt)}
+                    </time>
+                    {" · "}
+                    {entry.changedByName ||
+                      (entry.changedByUserId !== null
+                        ? `Kullanıcı #${entry.changedByUserId}`
+                        : "Kullanıcı bilgisi yok")}
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
   );
 }
 export function OrderStatusSelect({
@@ -484,24 +574,32 @@ export function OrderDetail({
         <OrderStatusBadge status={order.status} />
       </PageTitle>
       <div className="checkout-layout">
-        <div className="panel">
-          <h2>Siparişindeki ürünler</h2>
-          {order.items.map((item, index) => (
-            <div className="order-line" key={`${item.productId}-${index}`}>
-              <div>
-                <Link href={`/products/${item.productId}`}>
-                  <h3>{item.productName}</h3>
-                </Link>
-                <p className="muted">
-                  {item.quantity} adet × {money(item.unitPrice)}
-                </p>
+        <div className="order-detail-main">
+          <div className="panel">
+            <h2>Siparişindeki ürünler</h2>
+            {order.items.map((item, index) => (
+              <div className="order-line" key={`${item.productId}-${index}`}>
+                <div>
+                  <Link href={`/products/${item.productId}`}>
+                    <h3>{item.productName}</h3>
+                  </Link>
+                  <p className="muted">
+                    {item.quantity} adet × {money(item.unitPrice)}
+                  </p>
+                </div>
+                <strong>{money(item.lineTotal)}</strong>
               </div>
-              <strong>{money(item.lineTotal)}</strong>
+            ))}
+            <div className="summary-row total">
+              <span>Sipariş toplamı</span>
+              <strong>{money(order.totalPrice)}</strong>
             </div>
-          ))}
-          <div className="summary-row total">
-            <span>Sipariş toplamı</span>
-            <strong>{money(order.totalPrice)}</strong>
+          </div>
+          <div className="panel">
+            <OrderStatusTimeline
+              orderId={order.id}
+              currentStatus={order.status}
+            />
           </div>
         </div>
         <aside className="summary">

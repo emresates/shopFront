@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { request, setAccessToken, ApiError } from "../lib/api/client";
+import { parseApiDate } from "../lib/format";
 import {
   cancelOrder,
   getAdminOrders,
+  getOrderStatusHistory,
   ordersApi,
   updateOrderStatus,
 } from "../lib/api/orders";
@@ -48,6 +50,12 @@ test("customers can cancel only before shipping", () => {
   for (const status of ["Shipped", "Delivered", "Cancelled"] as const)
     assert.equal(canCancelOrder(status), false);
   assert.equal(canCancelOrder("Refunded" as OrderStatus), false);
+});
+test("API timestamps are read as UTC", () => {
+  const utc = "2026-10-08T09:32:20.000Z";
+  assert.equal(parseApiDate("2026-10-08T09:32:20").toISOString(), utc);
+  assert.equal(parseApiDate("2026-10-08T09:32:20.000Z").toISOString(), utc);
+  assert.equal(parseApiDate("2026-10-08T12:32:20+03:00").toISOString(), utc);
 });
 test("transition list cannot mutate the shared rules", () => {
   getAllowedOrderTransitions("Pending").push("Delivered");
@@ -180,6 +188,65 @@ test("order status API contract", async (context) => {
       );
     },
   );
+  await context.test("GET history keeps the API order and nulls", async () => {
+    setAccessToken("customer-token");
+    globalThis.fetch = async (url, options) => {
+      assert.equal(url, "https://shopapi.example.test/api/orders/5/history");
+      assert.equal(
+        new Headers(options?.headers).get("Authorization"),
+        "Bearer customer-token",
+      );
+      return Response.json({
+        data: [
+          {
+            id: 1,
+            oldStatus: null,
+            newStatus: "Pending",
+            changedByUserId: 9,
+            changedByName: "Ada",
+            changedAt: "2026-10-08T09:00:00Z",
+          },
+          {
+            id: 2,
+            oldStatus: "Pending",
+            newStatus: "Cancelled",
+            changedByUserId: null,
+            changedByName: null,
+            changedAt: "2026-10-08T10:00:00Z",
+          },
+        ],
+        statusCode: 200,
+      });
+    };
+    const result = await getOrderStatusHistory(5);
+    assert.deepEqual(
+      result.data.map((h) => [h.oldStatus, h.newStatus]),
+      [
+        [null, "Pending"],
+        ["Pending", "Cancelled"],
+      ],
+    );
+    assert.equal(result.data[1].changedByName, null);
+  });
+  await context.test("another customer's history is a 404", async () => {
+    globalThis.fetch = async () =>
+      Response.json(
+        {
+          data: null,
+          message: "Sipariş bulunamadı.",
+          errCode: "orderNotFound",
+          statusCode: 404,
+        },
+        { status: 404 },
+      );
+    await assert.rejects(
+      getOrderStatusHistory(99),
+      (error) =>
+        error instanceof ApiError &&
+        error.status === 404 &&
+        error.message === "Sipariş bulunamadı.",
+    );
+  });
   await context.test("403 for customers keeps a readable message", async () => {
     globalThis.fetch = async () => new Response(null, { status: 403 });
     await assert.rejects(

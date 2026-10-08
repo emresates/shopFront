@@ -5,7 +5,11 @@ import { Eye } from "lucide-react";
 import type { AdminOrder } from "@/types";
 import { ordersApi } from "@/lib/api/orders";
 import { date, money } from "@/lib/format";
-import { OrderStatusBadge, OrderStatusSelect } from "./orders";
+import {
+  OrderStatusBadge,
+  OrderStatusSelect,
+  OrderStatusTimeline,
+} from "./orders";
 import { Empty, ErrorState, Modal, PageTitle, Skeleton } from "./ui";
 export function AdminOrdersTable({
   orders,
@@ -117,7 +121,11 @@ export function AdminOrders() {
               </dd>
             </div>
           </dl>
-          <p className="muted">
+          <OrderStatusTimeline
+            orderId={detail.id}
+            currentStatus={detail.status}
+          />
+          <p className="muted modal-note">
             Durum değişiklikleri sipariş tablosundan yapılır.
           </p>
         </Modal>

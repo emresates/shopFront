@@ -95,6 +95,14 @@ export interface Order {
   createdAt: string;
   items: OrderItem[];
 }
+export interface OrderStatusHistory {
+  id: number;
+  oldStatus: OrderStatus | null;
+  newStatus: OrderStatus;
+  changedByUserId: number | null;
+  changedByName: string | null;
+  changedAt: string;
+}
 export interface AdminOrder {
   id: number;
   userId: number;
