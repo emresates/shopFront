@@ -26,6 +26,27 @@ export interface Product {
   categoryId: number;
   categoryName: string;
   images: ProductImage[];
+  averageRating: number;
+  reviewCount: number;
+}
+export interface Review {
+  id: number;
+  productId: number;
+  userId: number;
+  userName: string;
+  rating: number;
+  comment: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+export interface ReviewSummary {
+  productId: number;
+  averageRating: number;
+  reviewCount: number;
+}
+export interface ReviewRequest {
+  rating: number;
+  comment?: string | null;
 }
 export type ProductInput = Pick<
   Product,
@@ -81,6 +102,7 @@ export interface OrderItem {
   unitPrice: number;
   quantity: number;
   lineTotal: number;
+  mainImageUrl?: string | null;
 }
 export type OrderStatus =
   "Pending" | "Paid" | "Preparing" | "Shipped" | "Delivered" | "Cancelled";

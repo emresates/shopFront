@@ -20,9 +20,10 @@ import {
   isOrderStatus,
   orderStatusLabel,
 } from "@/lib/order-status";
-import type { ApiResponse, Order, OrderStatus } from "@/types";
+import type { ApiResponse, Order, OrderItem, OrderStatus } from "@/types";
 import { useAuth, useCart, useToast } from "./providers";
 import { AddressForm, useAddresses } from "./addresses";
+import { ReviewProductButton } from "./reviews";
 import {
   Button,
   Empty,
@@ -128,6 +129,37 @@ export function OrderStatusTimeline({
         </ol>
       )}
     </section>
+  );
+}
+// Cancelled orders don't count as a purchase for reviews (the API decides).
+function OrderItemSummary({
+  item,
+  reviewable,
+}: {
+  item: OrderItem;
+  reviewable: boolean;
+}) {
+  return (
+    <div className="order-item">
+      <Link href={`/products/${item.productId}`} className="order-item-photo">
+        <ProductPhoto src={item.mainImageUrl} name={item.productName} />
+      </Link>
+      <div className="order-item-info">
+        <Link href={`/products/${item.productId}`}>
+          <h3>{item.productName}</h3>
+        </Link>
+        <p className="muted">
+          {item.quantity} adet × {money(item.unitPrice)}
+        </p>
+      </div>
+      <strong className="order-item-total">{money(item.lineTotal)}</strong>
+      {reviewable && (
+        <ReviewProductButton
+          productId={item.productId}
+          productName={item.productName}
+        />
+      )}
+    </div>
   );
 }
 export function OrderStatusSelect({
@@ -524,6 +556,18 @@ export function Orders({ success = false }: { success?: boolean }) {
                 <strong>{money(order.totalPrice)}</strong>
                 <ArrowRight size={20} />
               </Link>
+              {!!order.items?.length && (
+                <ul className="order-entry-items">
+                  {order.items.map((item, index) => (
+                    <li key={`${item.productId}-${index}`}>
+                      <OrderItemSummary
+                        item={item}
+                        reviewable={order.status !== "Cancelled"}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
               {canCancelOrder(order.status) && (
                 <div className="order-entry-actions">
                   <CancelOrderDialog order={order} />
@@ -579,15 +623,10 @@ export function OrderDetail({
             <h2>Siparişindeki ürünler</h2>
             {order.items.map((item, index) => (
               <div className="order-line" key={`${item.productId}-${index}`}>
-                <div>
-                  <Link href={`/products/${item.productId}`}>
-                    <h3>{item.productName}</h3>
-                  </Link>
-                  <p className="muted">
-                    {item.quantity} adet × {money(item.unitPrice)}
-                  </p>
-                </div>
-                <strong>{money(item.lineTotal)}</strong>
+                <OrderItemSummary
+                  item={item}
+                  reviewable={order.status !== "Cancelled"}
+                />
               </div>
             ))}
             <div className="summary-row total">

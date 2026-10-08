@@ -21,6 +21,7 @@ import { cartApi } from "@/lib/api/cart";
 import { favoritesApi } from "@/lib/api/favorites";
 import { money, errorMessage } from "@/lib/format";
 import { useAuth, useFavorites, useToast } from "./providers";
+import { formatRating, ProductReviews, RatingInline } from "./reviews";
 import {
   Button,
   Empty,
@@ -122,6 +123,13 @@ export function ProductCard({ product }: { product: Product | Favorite }) {
         <Link href={`/products/${id}`}>
           <h3>{product.name}</h3>
         </Link>
+        {/* Favorites carry no rating fields; never fetch per card. */}
+        {"averageRating" in product && (
+          <RatingInline
+            averageRating={product.averageRating}
+            reviewCount={product.reviewCount}
+          />
+        )}
         <p className="product-price">{money(product.price)}</p>
         <span className="stock-note">
           {product.stock > 0 ? `${product.stock} adet stokta` : "Tükendi"}
@@ -392,6 +400,21 @@ export function ProductDetail({
         <div className="detail-info">
           <p className="eyebrow">{p.categoryName}</p>
           <h1>{p.name}</h1>
+          <a
+            className="detail-rating"
+            href="#reviews"
+            aria-label={
+              p.reviewCount
+                ? `5 üzerinden ${formatRating(p.averageRating)} puan, ${p.reviewCount} değerlendirme. Değerlendirmelere git`
+                : "Henüz değerlendirilmemiş. Değerlendirmelere git"
+            }
+          >
+            <RatingInline
+              averageRating={p.averageRating}
+              reviewCount={p.reviewCount}
+              size="md"
+            />
+          </a>
           <p className="detail-price">{money(p.price)}</p>
           <p className="description">{p.description}</p>
           <p className={`availability ${p.stock < 1 ? "unavailable" : ""}`}>
@@ -416,6 +439,7 @@ export function ProductDetail({
           </div>
         </div>
       </div>
+      <ProductReviews productId={p.id} />
     </>
   );
 }

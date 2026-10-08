@@ -9,6 +9,28 @@ export class ApiError extends Error {
     this.name = "ApiError";
   }
 }
+// Friendly copy for ShopApi errCodes; anything else falls back to the API message.
+const errorMessages: Record<string, string> = {
+  categoryHasProducts: "İçerisinde ürün bulunan kategori silinemez.",
+  productNotPurchased:
+    "Bu ürünü değerlendirebilmek için önce satın almış olmalısınız.",
+  reviewAlreadyExists: "Bu ürünü zaten değerlendirdiniz.",
+  reviewNotFound: "Değerlendirme bulunamadı.",
+  productNotFound: "Ürün bulunamadı.",
+  ratingInvalid: "1 ile 5 arasında yıldız seçmelisiniz.",
+  commentTooLong: "Yorum en fazla 1000 karakter olabilir.",
+};
+// ASP.NET model validation replies with ProblemDetails, carrying the DTO's
+// ErrorMessage (e.g. "ratingInvalid") under `errors` instead of `errCode`.
+function validationCode(body: object) {
+  const errors = "errors" in body ? body.errors : null;
+  if (!errors || typeof errors !== "object") return null;
+  for (const value of Object.values(errors))
+    for (const item of Array.isArray(value) ? value : [])
+      if (typeof item === "string" && Object.hasOwn(errorMessages, item))
+        return item;
+  return null;
+}
 let token: string | null = null;
 export function setAccessToken(value: string | null) {
   token = value;
@@ -55,7 +77,14 @@ export async function request<T>(
     const parsed: unknown = await response.json();
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
       throw new Error("Invalid API envelope");
-    body = parsed as Partial<ApiResponse<T>>;
+    // ShopApi's exception middleware serializes the envelope in PascalCase
+    // ("Message", "ErrCode"); controllers use camelCase. Accept both.
+    body = Object.fromEntries(
+      Object.entries(parsed).map(([key, value]) => [
+        key.charAt(0).toLowerCase() + key.slice(1),
+        value,
+      ]),
+    ) as Partial<ApiResponse<T>>;
   } catch {
     if (
       response.status === 401 &&
@@ -67,7 +96,9 @@ export async function request<T>(
     throw new ApiError(
       response.status === 403
         ? "Bu işlem için yetkiniz bulunmuyor."
-        : "Sunucudan geçerli bir yanıt alınamadı.",
+        : response.status === 401
+          ? "Oturumunuz sona erdi. Tekrar giriş yapın."
+          : "Sunucudan geçerli bir yanıt alınamadı.",
       response.status,
     );
   }
@@ -82,16 +113,16 @@ export async function request<T>(
       typeof window !== "undefined"
     )
       window.dispatchEvent(new Event("shop:unauthorized"));
+    const code = body.errCode || validationCode(body);
     const message =
-      body.errCode === "categoryHasProducts"
-        ? "İçerisinde ürün bulunan kategori silinemez."
-        : body.message ||
-          (status === 403
-            ? "Bu işlem için yetkiniz bulunmuyor."
-            : status === 401
-              ? "Oturumunuz sona erdi. Tekrar giriş yapın."
-              : "İşlem tamamlanamadı.");
-    throw new ApiError(message, status, body.errCode);
+      (code && Object.hasOwn(errorMessages, code) && errorMessages[code]) ||
+      body.message ||
+      (status === 403
+        ? "Bu işlem için yetkiniz bulunmuyor."
+        : status === 401
+          ? "Oturumunuz sona erdi. Tekrar giriş yapın."
+          : "İşlem tamamlanamadı.");
+    throw new ApiError(message, status, code);
   }
   return { ...body, data: body.data as T, statusCode: status };
 }
