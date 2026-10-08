@@ -9,16 +9,17 @@ import {
   CheckCircle2,
   MapPin,
   Package,
-  RefreshCw,
+  XCircle,
 } from "lucide-react";
 import { ordersApi } from "@/lib/api/orders";
 import { date, errorMessage, money } from "@/lib/format";
 import {
+  canCancelOrder,
   getAllowedOrderTransitions,
   isOrderStatus,
   orderStatusLabel,
 } from "@/lib/order-status";
-import type { Order, OrderStatus } from "@/types";
+import type { ApiResponse, Order, OrderStatus } from "@/types";
 import { useAuth, useCart, useToast } from "./providers";
 import { AddressForm, useAddresses } from "./addresses";
 import {
@@ -39,82 +40,63 @@ export function OrderStatusBadge({ status }: { status: OrderStatus }) {
     </span>
   );
 }
-function OrderStatusActions({ order }: { order: Order }) {
-  const { currentUser } = useAuth();
+export function OrderStatusSelect({
+  orderId,
+  status,
+}: {
+  orderId: number;
+  status: OrderStatus;
+}) {
   const client = useQueryClient();
   const toast = useToast();
-  const allowed = getAllowedOrderTransitions(order.status);
-  const [next, setNext] = useState<OrderStatus | "">("");
+  const allowed = getAllowedOrderTransitions(status);
   const [confirming, setConfirming] = useState<OrderStatus | null>(null);
-  const selected = next && allowed.includes(next) ? next : allowed[0];
   const update = useMutation({
-    mutationFn: (status: OrderStatus) =>
-      ordersApi.updateStatus(order.id, status),
-    onSuccess: (result) => {
-      if (result.data)
-        client.setQueryData(["order", currentUser?.id, order.id], result);
-      void client.invalidateQueries({ queryKey: ["orders"] });
-      void client.invalidateQueries({ queryKey: ["order"] });
+    mutationFn: (next: OrderStatus) => ordersApi.updateStatus(orderId, next),
+    onSuccess: (result, next) => {
       setConfirming(null);
-      setNext("");
       toast(result.message || "Sipariş durumu güncellendi.");
+      if (next === "Cancelled") {
+        // The API restores stock on cancellation.
+        void client.invalidateQueries({ queryKey: ["products"] });
+        void client.invalidateQueries({ queryKey: ["product"] });
+      }
     },
     onError: (error) => {
       setConfirming(null);
       toast(errorMessage(error), true);
-      // A conflict means our copy is stale; reload the order from the API.
-      void client.invalidateQueries({ queryKey: ["order"] });
     },
+    // Refetch either way: a 409 means our copy of the status is stale.
+    onSettled: () =>
+      Promise.all([
+        client.invalidateQueries({ queryKey: ["orders"] }),
+        client.invalidateQueries({ queryKey: ["order"] }),
+      ]),
   });
+  if (!allowed.length)
+    return <span className="muted status-final">Değiştirilemez</span>;
   return (
-    <div className="status-manage">
-      <p className="eyebrow">YÖNETİM</p>
-      <h3>Sipariş durumu</h3>
-      <div className="status-current">
-        <span className="muted">Mevcut durum</span>
-        <OrderStatusBadge status={order.status} />
-      </div>
-      {!allowed.length ? (
-        <>
-          <p className="summary-note">
-            {order.status === "Cancelled"
-              ? "Sipariş iptal edildi. Durumu artık değiştirilemez."
-              : order.status === "Delivered"
-                ? "Sipariş tamamlandı. Durumu artık değiştirilemez."
-                : "Bu sipariş için uygun bir durum geçişi yok."}
-          </p>
-          <Button className="btn-secondary" disabled>
-            <RefreshCw size={16} />
-            Durumu güncelle
-          </Button>
-        </>
-      ) : (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (selected && !update.isPending) setConfirming(selected);
-          }}
-        >
-          <label>
-            Yeni durum
-            <select
-              value={selected}
-              disabled={update.isPending}
-              onChange={(event) => setNext(event.target.value as OrderStatus)}
-            >
-              {allowed.map((status) => (
-                <option key={status} value={status}>
-                  {orderStatusLabel(status)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <Button type="submit" pending={update.isPending}>
-            <RefreshCw size={16} />
-            Durumu güncelle
-          </Button>
-        </form>
-      )}
+    <>
+      <select
+        className="status-select"
+        aria-label={`Sipariş #${orderId} durumunu güncelle`}
+        value=""
+        disabled={update.isPending}
+        onChange={(event) => {
+          const next = event.target.value;
+          if (isOrderStatus(next) && allowed.includes(next))
+            setConfirming(next);
+        }}
+      >
+        <option value="" disabled>
+          {update.isPending ? "Güncelleniyor…" : "Durumu güncelle…"}
+        </option>
+        {allowed.map((next) => (
+          <option key={next} value={next}>
+            {orderStatusLabel(next)}
+          </option>
+        ))}
+      </select>
       {confirming && (
         <Modal
           title="Durum güncellensin mi?"
@@ -123,10 +105,10 @@ function OrderStatusActions({ order }: { order: Order }) {
           }}
         >
           <p>
-            Sipariş #{order.id}, “{orderStatusLabel(confirming)}” durumuna
-            geçirilecek. Bu işlemden emin misin?
+            Sipariş #{orderId}, “{orderStatusLabel(status)}” durumundan “
+            {orderStatusLabel(confirming)}” durumuna geçirilecek.
             {confirming === "Cancelled" &&
-              " İptal edilen sipariş tekrar aktif edilemez."}
+              " İptal edilen sipariş tekrar aktif edilemez ve stoklar geri yüklenir."}
           </p>
           <div className="form-actions">
             <Button
@@ -148,7 +130,96 @@ function OrderStatusActions({ order }: { order: Order }) {
           </div>
         </Modal>
       )}
-    </div>
+    </>
+  );
+}
+export function CancelOrderDialog({
+  order,
+}: {
+  order: Pick<Order, "id" | "status">;
+}) {
+  const { currentUser } = useAuth();
+  const client = useQueryClient();
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const cancel = useMutation({
+    mutationFn: () => ordersApi.cancel(order.id),
+    onSuccess: (result) => {
+      setOpen(false);
+      client.setQueryData<ApiResponse<Order>>(
+        ["order", currentUser?.id, order.id],
+        (old) =>
+          result.data
+            ? result
+            : old && { ...old, data: { ...old.data, status: "Cancelled" } },
+      );
+      client.setQueryData<ApiResponse<Order[]>>(
+        ["orders", currentUser?.id],
+        (old) =>
+          old && {
+            ...old,
+            data: old.data?.map((o) =>
+              o.id === order.id ? { ...o, status: "Cancelled" } : o,
+            ),
+          },
+      );
+      toast(result.message || "Sipariş iptal edildi.");
+      // The API restores stock on cancellation.
+      void client.invalidateQueries({ queryKey: ["products"] });
+      void client.invalidateQueries({ queryKey: ["product"] });
+    },
+    onError: (error) => {
+      setOpen(false);
+      toast(errorMessage(error), true);
+    },
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: ["orders"] });
+      void client.invalidateQueries({ queryKey: ["order"] });
+    },
+  });
+  if (!canCancelOrder(order.status)) return null;
+  return (
+    <>
+      <Button
+        className="btn-secondary btn-cancel-order"
+        pending={cancel.isPending}
+        onClick={() => setOpen(true)}
+      >
+        <XCircle size={16} />
+        Siparişi İptal Et
+      </Button>
+      {open && (
+        <Modal
+          title="Sipariş iptal edilsin mi?"
+          close={() => {
+            if (!cancel.isPending) setOpen(false);
+          }}
+        >
+          <p>
+            Bu siparişi iptal etmek istediğinize emin misiniz? Bu işlem geri
+            alınamaz.
+          </p>
+          <div className="form-actions">
+            <Button
+              className="btn-secondary"
+              disabled={cancel.isPending}
+              onClick={() => setOpen(false)}
+            >
+              Vazgeç
+            </Button>
+            <Button
+              className="btn-danger"
+              pending={cancel.isPending}
+              onClick={() => {
+                if (!cancel.isPending) cancel.mutate();
+              }}
+            >
+              Siparişi iptal et
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
 export function Checkout() {
@@ -343,27 +414,32 @@ export function Orders({ success = false }: { success?: boolean }) {
       ) : (
         <div className="orders-list">
           {orders.data.data.map((order) => (
-            <Link
-              className="order-card"
-              key={order.id}
-              href={`/orders/${order.id}`}
-            >
-              <div className="order-icon">
-                <Package size={25} />
-              </div>
-              <div>
-                <h3>Sipariş #{order.id}</h3>
-                <p className="muted">
-                  {date(order.createdAt)} ·{" "}
-                  {order.items?.reduce((sum, item) => sum + item.quantity, 0) ??
-                    0}{" "}
-                  ürün
-                </p>
-              </div>
-              <OrderStatusBadge status={order.status} />
-              <strong>{money(order.totalPrice)}</strong>
-              <ArrowRight size={20} />
-            </Link>
+            <div className="order-entry" key={order.id}>
+              <Link className="order-card" href={`/orders/${order.id}`}>
+                <div className="order-icon">
+                  <Package size={25} />
+                </div>
+                <div>
+                  <h3>Sipariş #{order.id}</h3>
+                  <p className="muted">
+                    {date(order.createdAt)} ·{" "}
+                    {order.items?.reduce(
+                      (sum, item) => sum + item.quantity,
+                      0,
+                    ) ?? 0}{" "}
+                    ürün
+                  </p>
+                </div>
+                <OrderStatusBadge status={order.status} />
+                <strong>{money(order.totalPrice)}</strong>
+                <ArrowRight size={20} />
+              </Link>
+              {canCancelOrder(order.status) && (
+                <div className="order-entry-actions">
+                  <CancelOrderDialog order={order} />
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -436,9 +512,7 @@ export function OrderDetail({
           <p>
             {order.shippingDistrict} / {order.shippingCity}
           </p>
-          {currentUser?.role === "Admin" && (
-            <OrderStatusActions order={order} />
-          )}
+          <CancelOrderDialog order={order} />
           <Link href="/orders" className="text-link">
             Tüm siparişler <ArrowRight size={16} />
           </Link>

@@ -95,6 +95,16 @@ export interface Order {
   createdAt: string;
   items: OrderItem[];
 }
+export interface AdminOrder {
+  id: number;
+  userId: number;
+  customerName: string;
+  customerEmail: string;
+  status: OrderStatus;
+  totalPrice: number;
+  createdAt: string;
+  totalQuantity: number;
+}
 export interface CurrentUser {
   id: string;
   name: string;

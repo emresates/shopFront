@@ -1,6 +1,6 @@
 # form — ShopApi frontend
 
-Next.js App Router, strict TypeScript, Tailwind CSS 4 ve TanStack Query ile gerçek ShopApi uç noktalarına bağlı e-ticaret arayüzü. Mock ürün, ödeme, kupon, değerlendirme veya admin sipariş yönetimi içermez.
+Next.js App Router, strict TypeScript, Tailwind CSS 4 ve TanStack Query ile gerçek ShopApi uç noktalarına bağlı e-ticaret arayüzü. Mock ürün, sipariş, ödeme, kupon veya değerlendirme içermez.
 
 ## Çalıştırma
 
@@ -32,7 +32,7 @@ npm start
 | Vitrin  | `/`, `/products`, `/products/[id]`                                                              |
 | Oturum  | `/login`, `/register`                                                                           |
 | Müşteri | `/favorites`, `/cart`, `/checkout`, `/orders`, `/orders/[id]`, `/account`, `/account/addresses` |
-| Admin   | `/admin`, `/admin/products`, `/admin/categories`                                                |
+| Admin   | `/admin`, `/admin/products`, `/admin/categories`, `/admin/orders`                               |
 
 Route ve layout dosyaları Server Component'tir. Ürün detayının ilk verisi sunucudan gelir; bulunamayan ürün Next.js 404 ekranını kullanır. Formlar, sorgular, sepet ve diğer etkileşimli alanlar Client Component sınırlarında çalışır. Suspense, loading, error ve not-found sınırları vardır.
 
@@ -53,6 +53,8 @@ Route ve layout dosyaları Server Component'tir. Ürün detayının ilk verisi s
 - Sepet ekleme POST, adet güncelleme PUT, silme/temizleme DELETE uç noktalarını kullanır. Tekrar ekleme miktar artışı backend'e bırakılır. Header adedi backend `totalQuantity` değeridir.
 - Adres oluşturma, düzenleme, silme ve varsayılan seçimi desteklenir. Dialoglar native `<dialog>` ile klavye/focus yönetimi sağlar.
 - Checkout yalnızca `{ addressId }` gönderir. UserId, ürün fiyatı veya toplam gönderilmez. Başarıda sepet refetch edilir, sipariş listesi invalidation alır ve sipariş detayına geçilir. Ödeme entegrasyonu yoktur; belirsiz ağ hatasında otomatik sipariş tekrarı yapılmaz.
+- Müşteri, `Pending`, `Paid` veya `Preparing` durumundaki kendi siparişini `/orders` ve `/orders/[id]` sayfalarından onay dialog'u ile iptal edebilir (`PATCH /api/orders/{id}/cancel`, body yok). Başarıda sipariş önbellekte `Cancelled` yapılır, liste yeniden okunur ve buton kalkar.
+- `/admin/orders` tüm siparişleri `GET /api/orders/admin` ile listeler. Durum seçimi yalnızca izin verilen geçişleri gösterir, onay dialog'u sonrası `PATCH /api/orders/{id}/status` gönderir; 409 mesajı toast ile gösterilir ve liste yeniden okunur. Geçiş kuralları `lib/order-status.ts` içinde yalnızca UX içindir; yetki ve durum doğrulaması backend'dedir. Admin durum kontrolleri müşteri sayfalarında gösterilmez. Backend tekil sipariş detayını yalnızca sahibine döndürdüğü için admin detay penceresi liste verisini gösterir.
 - Admin ürün ve kategori CRUD, kategori filtreleme, sayfalama, silme onayı ve görsel yönetimi içerir. Birden çok dosya sırayla backend'e `File` ve `IsMain` alanlarıyla gönderilir; multipart Content-Type elle ayarlanmaz. Kısmi yükleme hatasında mevcut görseller tekrar okunur.
 
 ## Doğrulama

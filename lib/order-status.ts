@@ -22,3 +22,6 @@ export const getAllowedOrderTransitions = (status: OrderStatus) =>
   isOrderStatus(status) ? [...transitions[status]] : [];
 export const orderStatusLabel = (status: OrderStatus) =>
   isOrderStatus(status) ? orderStatusLabels[status] : String(status);
+// Customers may cancel exactly when the state machine allows → Cancelled.
+export const canCancelOrder = (status: OrderStatus) =>
+  getAllowedOrderTransitions(status).includes("Cancelled");

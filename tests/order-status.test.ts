@@ -1,8 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { request, setAccessToken, ApiError } from "../lib/api/client";
-import { ordersApi, updateOrderStatus } from "../lib/api/orders";
 import {
+  cancelOrder,
+  getAdminOrders,
+  ordersApi,
+  updateOrderStatus,
+} from "../lib/api/orders";
+import {
+  canCancelOrder,
   getAllowedOrderTransitions,
   isOrderStatus,
   orderStatusLabel,
@@ -35,6 +41,13 @@ test("order status helpers tolerate unknown API values", () => {
   assert.equal(orderStatusLabel(unknown), "Refunded");
   assert.equal(isOrderStatus("toString"), false);
   assert.equal(orderStatusLabel("Shipped"), "Kargoya Verildi");
+});
+test("customers can cancel only before shipping", () => {
+  for (const status of ["Pending", "Paid", "Preparing"] as const)
+    assert.equal(canCancelOrder(status), true);
+  for (const status of ["Shipped", "Delivered", "Cancelled"] as const)
+    assert.equal(canCancelOrder(status), false);
+  assert.equal(canCancelOrder("Refunded" as OrderStatus), false);
 });
 test("transition list cannot mutate the shared rules", () => {
   getAllowedOrderTransitions("Pending").push("Delivered");
@@ -98,11 +111,92 @@ test("order status API contract", async (context) => {
           error.message === message,
       );
     });
+  await context.test("GET admin orders sends bearer auth", async () => {
+    setAccessToken("admin-token");
+    globalThis.fetch = async (url, options) => {
+      assert.equal(url, "https://shopapi.example.test/api/orders/admin");
+      assert.equal(options?.method, undefined);
+      assert.equal(
+        new Headers(options?.headers).get("Authorization"),
+        "Bearer admin-token",
+      );
+      return Response.json({
+        data: [
+          {
+            id: 3,
+            userId: 9,
+            customerName: "Ada",
+            customerEmail: "ada@example.test",
+            status: "Paid",
+            totalPrice: 120,
+            createdAt: "2026-10-06T10:00:00Z",
+            totalQuantity: 2,
+          },
+        ],
+        statusCode: 200,
+      });
+    };
+    const result = await getAdminOrders();
+    assert.equal(result.data[0].customerEmail, "ada@example.test");
+    assert.equal(result.data[0].totalQuantity, 2);
+  });
+  await context.test("PATCH cancel sends no body", async () => {
+    setAccessToken("customer-token");
+    globalThis.fetch = async (url, options) => {
+      assert.equal(url, "https://shopapi.example.test/api/orders/5/cancel");
+      assert.equal(options?.method, "PATCH");
+      assert.equal(options?.body, undefined);
+      assert.equal(new Headers(options?.headers).get("Content-Type"), null);
+      return Response.json({
+        data: { id: 5, status: "Cancelled" },
+        message: "Sipariş başarıyla iptal edildi.",
+        statusCode: 200,
+      });
+    };
+    const result = await cancelOrder(5);
+    assert.equal(result.data.status, "Cancelled");
+    assert.equal(result.message, "Sipariş başarıyla iptal edildi.");
+  });
+  await context.test(
+    "409 on repeated cancel surfaces the API message",
+    async () => {
+      const message = "Sipariş zaten bu durumda.";
+      globalThis.fetch = async () =>
+        Response.json(
+          {
+            data: null,
+            message,
+            errCode: "orderAlreadyInStatus",
+            statusCode: 409,
+          },
+          { status: 409 },
+        );
+      await assert.rejects(
+        cancelOrder(5),
+        (error) =>
+          error instanceof ApiError &&
+          error.status === 409 &&
+          error.message === message,
+      );
+    },
+  );
   await context.test("403 for customers keeps a readable message", async () => {
     globalThis.fetch = async () => new Response(null, { status: 403 });
     await assert.rejects(
       request("/api/orders/1/status", { method: "PATCH" }),
       (error) => error instanceof ApiError && error.status === 403,
+    );
+    globalThis.fetch = async () =>
+      Response.json(
+        { data: null, message: "Bu işlem için yetkiniz yok.", statusCode: 403 },
+        { status: 403 },
+      );
+    await assert.rejects(
+      getAdminOrders(),
+      (error) =>
+        error instanceof ApiError &&
+        error.status === 403 &&
+        error.message === "Bu işlem için yetkiniz yok.",
     );
   });
 });

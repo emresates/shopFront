@@ -14,6 +14,7 @@ import {
   Upload,
   Star,
   ArrowUpRight,
+  ClipboardList,
 } from "lucide-react";
 import type { Product, ProductInput, Category } from "@/types";
 import { validateProduct, requiredText } from "@/lib/validation";
@@ -42,6 +43,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
             { href: "/admin", title: "Genel bakış", icon: LayoutDashboard },
             { href: "/admin/products", title: "Ürünler", icon: Package },
             { href: "/admin/categories", title: "Kategoriler", icon: Shapes },
+            { href: "/admin/orders", title: "Siparişler", icon: ClipboardList },
           ].map((link) => (
             <Link
               key={link.href}
